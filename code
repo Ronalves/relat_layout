@@ -1,0 +1,653 @@
+*======================================================================*
+* Programa      : ZRFI934
+* Título        : Relatório Posição Saldos Diários
+* Autor         : Z221452
+* Data Criação  : 20/04/202
+* Especificação : FI - Sinval Pereira
+*----------------------------------------------------------------------*
+* Descrição do Processo:
+*
+*----------------------------------------------------------------------*
+* Alterações :
+* Data          Responsável       Identificação   Descrição
+*
+*======================================================================*
+REPORT  zrfi934.
+
+***********
+**Tabelas**
+***********
+TABLES:tiv79,febko,ztbfi834.
+
+*********
+**Types**
+*********
+TYPES:BEGIN OF ty_febko,
+       bukrs TYPE febko-bukrs,
+       hkont TYPE febko-hkont,
+       ktonr TYPE febko-ktonr,
+       ktopl TYPE febko-ktopl,
+       absnd TYPE febko-absnd,
+       hbkid TYPE febko-hbkid,
+       hktid TYPE febko-hktid,
+       azdat TYPE febko-azdat,
+       azidt TYPE febko-azidt,
+       ssbtr TYPE febko-ssbtr,
+       esbtr TYPE febko-esbtr,
+     END OF ty_febko.
+
+TYPES:BEGIN OF ty_final,
+       bukrs       TYPE  bukrs,
+       hkont       TYPE  hkont,
+       banco       TYPE  zebanco,
+       agencia     TYPE  zeagencia,
+       ktonr       TYPE  ze_bankn,
+       absnd       TYPE  ze_absndeb,
+       hbkid       TYPE  zehbkid,
+       hktid       TYPE  zehktid,
+       azdat       TYPE  azdat_eb,
+       azidt       TYPE  azidt_eb,
+       ssbtr       TYPE  zesaldoant,
+       ext_manual  TYPE  zeextrato,
+       esbtr       TYPE  zeesbtr_eb,
+       realizado   TYPE  zerealizado,
+       style       TYPE  lvc_t_styl,
+     END OF ty_final.
+
+********************
+**Tabelas Internas**
+********************
+DATA:tg_alv_fieldcat TYPE slis_t_fieldcat_alv,
+     tg_sort         TYPE TABLE OF slis_sortinfo_alv,
+     tg_final        TYPE TABLE OF ty_final,
+     tg_febko        TYPE TABLE OF ty_febko,
+     tg_febko2       TYPE TABLE OF ty_febko,
+     tg_febko3       TYPE TABLE OF ty_febko,
+     tg_ztbfi834     TYPE TABLE OF ztbfi834,
+     tg_ztbfi834a    TYPE TABLE OF ztbfi834,
+     tg_ztbfi834b    TYPE TABLE OF ztbfi834.
+
+**********
+**Ranges**
+**********
+DATA:r_dtextrato TYPE RANGE OF sydatum.
+
+**************
+**Estruturas**
+**************
+DATA:wg_disvariant   TYPE disvariant,
+     wg_final        TYPE ty_final,
+     wg_febko        TYPE ty_febko,
+     wg_febko3       TYPE ty_febko,
+     wg_ztbfi834     TYPE ztbfi834,
+     wg_ztbfi834b    TYPE ztbfi834,
+     wg_edit         TYPE lvc_s_styl,
+     wg_dtextrato    LIKE LINE OF r_dtextrato.
+
+*************
+**Variáveis**
+*************
+DATA:vg_layout   TYPE slis_layout_alv,
+     vg_found(1) TYPE c,
+     vg_data     TYPE azdat_eb.
+
+**************
+**Constantes**
+**************
+CONSTANTS:c_a1(1)                   TYPE c VALUE 'A',
+          c_standard_fullscreen(19) TYPE c VALUE 'STANDARD_FULLSCREEN',
+          c_date(6)                 TYPE c VALUE 'Data: ',
+          c_space(1)                TYPE c VALUE ' ',
+          c_ponto(1)                TYPE c VALUE '.',
+          c_s(1)                    TYPE c VALUE 'S',
+          c_1(1)                    TYPE c VALUE '1',
+          c_0(1)                    TYPE c VALUE '0',
+          c_bt(2)                   TYPE c VALUE 'BT',
+          c_i(1)                    TYPE c VALUE 'I',
+          c_mp(2)                   TYPE c VALUE 'MP'.
+
+FIELD-SYMBOLS:<f_fieldcat> TYPE slis_fieldcat_alv,
+              <f_final>    TYPE ty_final,
+              <f_febko3>   TYPE ty_febko.
+
+
+*******************
+**Tela de Seleção**
+*******************
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE text-001.
+SELECT-OPTIONS: s_ktopl  FOR  tiv79-ktopl DEFAULT 'BR01' OBLIGATORY,
+                s_hkont  FOR  febko-hkont,
+                s_bukrs  FOR  febko-bukrs,
+                s_ktonr  FOR  ztbfi834-ktonr MATCHCODE OBJECT ze_ktonr.
+
+PARAMETERS:p_dataex TYPE azdat_eb OBLIGATORY.
+
+SELECT-OPTIONS:s_hbkid FOR ztbfi834-hbkid MATCHCODE OBJECT ze_hbkid,
+               s_hktid FOR ztbfi834-hktid MATCHCODE OBJECT ze_hbtid.
+SELECTION-SCREEN END OF BLOCK b1.
+
+SELECTION-SCREEN BEGIN OF BLOCK bl03 WITH FRAME TITLE text-tb3.
+SELECTION-SCREEN BEGIN OF LINE.
+SELECTION-SCREEN COMMENT 1(29) text-tb4.
+* Layout
+PARAMETERS:p_layout TYPE disvariant-variant.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN END OF BLOCK bl03.
+
+*&---------------------------------------------------------------------&
+* AT SELECTION-SCREEN
+*&---------------------------------------------------------------------&
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_layout.
+  PERFORM zf_f4_layouts USING cl_salv_layout=>restrict_none
+                        CHANGING p_layout.
+
+**********
+**Início**
+**********
+START-OF-SELECTION.
+
+  PERFORM seleciona_dados.
+
+  IF  vg_found IS INITIAL.
+    PERFORM filtra_ultima_data.
+    PERFORM monta_dados.
+*    IF tg_febko2[] IS NOT INITIAL.
+*      PERFORM seleciona_dados_nova_data.
+*      PERFORM monta_dados2.
+*    ENDIF.
+    PERFORM exibe_dados.
+  ENDIF.
+
+*&---------------------------------------------------------------------*
+*&      Form  SELECIONA_DADOS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM seleciona_dados .
+
+  CLEAR: vg_found,vg_data,wg_dtextrato.
+
+  vg_data = p_dataex - 6.
+
+  wg_dtextrato-low  = vg_data.
+  wg_dtextrato-high = p_dataex.
+  wg_dtextrato-option = c_bt.
+  wg_dtextrato-sign = c_i.
+  APPEND wg_dtextrato TO r_dtextrato.
+
+  SELECT bukrs
+         hkont
+         ktonr
+         ktopl
+         absnd
+         hbkid
+         hktid
+         azdat
+         azidt
+         ssbtr
+         esbtr
+         FROM febko
+         INTO TABLE tg_febko
+         WHERE ktopl IN s_ktopl
+           AND hkont IN s_hkont
+           AND bukrs IN s_bukrs
+           AND azdat IN r_dtextrato[]
+           AND ktonr IN s_ktonr
+           AND hbkid IN s_hbkid
+           AND hktid IN s_hktid
+           %_HINTS ORACLE 'index(febko "FEBKO~Z01")'.
+  IF sy-subrc = 0.
+
+    SELECT *
+           FROM ztbfi834
+           INTO TABLE tg_ztbfi834
+           FOR ALL ENTRIES IN tg_febko
+           WHERE empresa = tg_febko-bukrs
+             AND hkont = tg_febko-hkont
+             AND ktonr = tg_febko-ktonr
+             AND absnd = tg_febko-absnd
+             AND hbkid = tg_febko-hbkid
+             AND hktid = tg_febko-hktid.
+  ELSE.
+
+    SELECT *
+       FROM ztbfi834
+       INTO TABLE tg_ztbfi834b
+       WHERE empresa IN s_bukrs
+         AND hkont IN s_hkont
+         AND ktonr IN s_ktonr
+         AND hbkid IN s_hbkid
+         AND hktid IN s_hktid
+         AND sinal = c_mp.
+    IF sy-subrc NE 0.
+
+      vg_found = abap_true.
+
+    ENDIF.
+
+  ENDIF.
+
+  IF vg_found IS NOT INITIAL.
+    MESSAGE i000(zb) WITH text-003.
+  ENDIF.
+
+ENDFORM.                    " SELECIONA_DADOS
+*&---------------------------------------------------------------------*
+*&      Form  EXIBE_DADOS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM exibe_dados .
+
+* Generation of fieldcat fields.
+  CALL FUNCTION 'REUSE_ALV_FIELDCATALOG_MERGE'
+    EXPORTING
+      i_structure_name       = 'ZEFI945'
+    CHANGING
+      ct_fieldcat            = tg_alv_fieldcat
+    EXCEPTIONS                                              "#EC *
+      inconsistent_interface = 1
+      program_error          = 2
+      OTHERS                 = 3.
+
+  LOOP AT tg_alv_fieldcat ASSIGNING <f_fieldcat>.
+    IF <f_fieldcat>-fieldname = 'EXT_MANUAL'.
+      <f_fieldcat>-edit = abap_true.
+    ENDIF.
+  ENDLOOP.
+
+  vg_layout-zebra = abap_true.
+  wg_disvariant-variant = p_layout.
+  wg_disvariant-report = sy-repid.
+
+*  Generation of ALV.
+  CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+    EXPORTING
+*     I_INTERFACE_CHECK                 = ' '
+*     I_BYPASSING_BUFFER                = ' '
+*     I_BUFFER_ACTIVE                   = ' '
+     i_callback_program                 = sy-repid
+     i_callback_pf_status_set           = 'PF_STATUS_ALV'
+     i_callback_user_command            = 'USER_COMMAND'
+     i_callback_top_of_page             = 'TOP'
+*     I_CALLBACK_HTML_TOP_OF_PAGE       = ' '
+*     I_CALLBACK_HTML_END_OF_LIST       = ' '
+*     I_STRUCTURE_NAME                  =
+*     i_background_id                    = 'FUNDO_BRANCO'
+*     I_GRID_TITLE                      =
+*     I_GRID_SETTINGS                   =
+      is_layout                         = vg_layout
+      it_fieldcat                       = tg_alv_fieldcat
+      it_sort                           = tg_sort[]
+*     IT_EXCLUDING                      =
+*     IT_SPECIAL_GROUPS                 =
+*     IT_SORT                           =
+*     IT_FILTER                         =
+*     IS_SEL_HIDE                       =
+*     I_DEFAULT                         = 'X'
+      i_save                            = c_a1
+      is_variant                        = wg_disvariant
+*     IT_EVENTS                         =
+*     IT_EVENT_EXIT                     =
+*     IS_PRINT                          =
+*     IS_REPREP_ID                      =
+*     I_SCREEN_START_COLUMN             = 0
+*     I_SCREEN_START_LINE               = 0
+*     I_SCREEN_END_COLUMN               = 0
+*     I_SCREEN_END_LINE                 = 0
+*     I_HTML_HEIGHT_TOP                 = 0
+*     I_HTML_HEIGHT_END                 = 0
+*     IT_ALV_GRAPHICS                   =
+*     IT_HYPERLINK                      =
+*     IT_ADD_FIELDCAT                   =
+*     IT_EXCEPT_QINFO                   =
+*     IR_SALV_FULLSCREEN_ADAPTER        =
+*   IMPORTING
+*     E_EXIT_CAUSED_BY_CALLER           =
+*     ES_EXIT_CAUSED_BY_USER            =
+    TABLES
+      t_outtab                          = tg_final
+    EXCEPTIONS                                              "#EC *
+      program_error                     = 1
+      OTHERS                            = 2.
+
+
+ENDFORM.                    " EXIBE_DADOS
+*&---------------------------------------------------------------------*
+*&      Form  user_command
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->R_UCOMM      text
+*      -->RS_SELFIELD  text
+*----------------------------------------------------------------------*
+FORM user_command USING r_ucomm TYPE sy-ucomm               "#EC CALLED
+                        rs_selfield TYPE slis_selfield.
+
+
+  DATA: gcl_grid TYPE REF TO cl_gui_alv_grid.
+
+  IF gcl_grid IS INITIAL.
+
+    "Get OO Ref to Grid
+    CALL FUNCTION 'GET_GLOBALS_FROM_SLVC_FULLSCR'
+      IMPORTING
+        e_grid = gcl_grid.
+
+  ENDIF.
+
+  CALL METHOD gcl_grid->check_changed_data.
+
+  IF r_ucomm = '&CALC'.
+
+    LOOP AT tg_final ASSIGNING <f_final>.
+      <f_final>-realizado = <f_final>-ssbtr + <f_final>-ext_manual - <f_final>-esbtr.
+    ENDLOOP.
+
+  ENDIF.
+
+  rs_selfield-refresh = abap_true.
+
+ENDFORM. "user_command
+*&---------------------------------------------------------------------*
+*&      Form  PF_STATUS_ALV
+*&---------------------------------------------------------------------*
+FORM pf_status_alv USING i_extab TYPE slis_t_extab.         "#EC CALLED
+
+  SET PF-STATUS c_standard_fullscreen EXCLUDING i_extab.
+
+ENDFORM.                    " PF_STATUS_ALV
+** Form TOP-OF-PAGE *
+*-------------------------------------------------------------------
+** ALV Report Header *
+*-------------------------------------------------------------------
+FORM top.
+*ALV Header declarations
+  DATA:t_header  TYPE TABLE OF slis_listheader,
+       wa_header TYPE slis_listheader,
+       o_grid    TYPE REF TO  cl_gui_alv_grid,
+       meth(20)  TYPE c VALUE 'SET_FRONTEND_LAYOUT',
+       ls_layout TYPE lvc_s_layo.
+
+  CLEAR:wa_header,t_header[].
+
+* Title
+  wa_header-typ = 'H'.
+  wa_header-info = text-002. " Relatório Posição de Saldos Diários.
+  APPEND wa_header TO t_header.
+  CLEAR wa_header.
+
+* Date
+  wa_header-typ = c_s.
+  wa_header-key = c_date.
+  CONCATENATE p_dataex+6(2)
+  p_dataex+4(2)
+  p_dataex(4) INTO wa_header-info SEPARATED BY c_ponto.
+  APPEND wa_header TO t_header.
+  CLEAR: wa_header.
+
+  CALL FUNCTION 'REUSE_ALV_COMMENTARY_WRITE'
+    EXPORTING
+      it_list_commentary = t_header.
+
+  IF o_grid IS INITIAL.
+
+    CALL FUNCTION 'GET_GLOBALS_FROM_SLVC_FULLSCR'
+      IMPORTING
+        e_grid = o_grid.
+
+    ls_layout-stylefname = 'STYLE'.
+    ls_layout-zebra = abap_true.
+    CALL METHOD o_grid->(meth)
+      EXPORTING
+        is_layout = ls_layout.
+
+    CALL METHOD o_grid->refresh_table_display.
+
+    CALL METHOD o_grid->register_edit_event
+      EXPORTING
+        i_event_id = cl_gui_alv_grid=>mc_evt_enter.
+
+  ENDIF.
+
+ENDFORM.                    "top
+*&---------------------------------------------------------------------*
+*&      Form  MONTA_DADOS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM monta_dados .
+
+  SORT:tg_febko BY bukrs hkont ktonr absnd hbkid hktid,
+       tg_ztbfi834 BY empresa hkont ktonr absnd hbkid hktid.
+
+  CLEAR: tg_final[],tg_febko2[].
+
+  LOOP AT tg_febko INTO wg_febko.
+    READ TABLE tg_ztbfi834 INTO wg_ztbfi834 WITH KEY empresa = wg_febko-bukrs
+                                                       hkont = wg_febko-hkont
+                                                       ktonr = wg_febko-ktonr
+                                                       absnd = wg_febko-absnd
+                                                       hbkid = wg_febko-hbkid
+                                                       hktid = wg_febko-hktid BINARY SEARCH.
+    IF sy-subrc = 0.
+      IF wg_ztbfi834-sinal = c_1 OR wg_ztbfi834-sinal = c_0.
+
+        wg_final-bukrs = wg_febko-bukrs.
+        wg_final-hkont = wg_febko-hkont.
+        wg_final-banco = wg_ztbfi834-banco.
+        wg_final-agencia = wg_ztbfi834-agencia.
+        wg_final-ktonr = wg_febko-ktonr.
+        wg_final-absnd = wg_febko-absnd.
+        wg_final-hbkid = wg_febko-hbkid.
+        wg_final-hktid = wg_febko-hktid.
+        wg_final-azdat = wg_febko-azdat.
+        wg_final-ssbtr = wg_febko-ssbtr.
+        wg_final-esbtr = wg_febko-esbtr.
+        wg_final-azidt = wg_febko-azidt.
+        wg_final-realizado = wg_final-ssbtr + wg_final-ext_manual - wg_final-esbtr.
+        APPEND wg_final TO tg_final.
+
+      ENDIF.
+    ENDIF.
+
+    CLEAR: wg_edit,wg_final.
+
+  ENDLOOP.
+
+  LOOP AT tg_ztbfi834b INTO wg_ztbfi834b.
+
+    wg_final-bukrs = wg_ztbfi834b-empresa.
+    wg_final-hkont = wg_ztbfi834b-hkont.
+    wg_final-banco = wg_ztbfi834b-banco.
+    wg_final-agencia = wg_ztbfi834b-agencia.
+    wg_final-ktonr = wg_ztbfi834b-ktonr.
+    wg_final-absnd = wg_ztbfi834b-absnd.
+    wg_final-hbkid = wg_ztbfi834b-hbkid.
+    wg_final-hktid = wg_ztbfi834b-hktid.
+    wg_final-azdat = p_dataex.
+    wg_edit-fieldname = 'SSBTR'.
+    wg_edit-style = cl_gui_alv_grid=>mc_style_enabled.
+    APPEND wg_edit TO wg_final-style.
+    APPEND wg_final TO tg_final.
+
+    CLEAR: wg_edit,wg_final.
+
+  ENDLOOP.
+
+ENDFORM.                    " MONTA_DADOS
+*&---------------------------------------------------------------------*
+*&      Form  SELECIONA_DADOS_NOVA_DATA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM seleciona_dados_nova_data .
+
+  CLEAR: tg_febko[],tg_ztbfi834a[].
+
+  SELECT bukrs
+         hkont
+         ktonr
+         ktopl
+         absnd
+         hbkid
+         hktid
+         azdat
+         azidt
+         ssbtr
+         esbtr
+         FROM febko
+         INTO TABLE tg_febko
+         FOR ALL ENTRIES IN tg_febko2
+         WHERE ktopl = tg_febko2-ktopl
+           AND hkont = tg_febko2-hkont
+           AND bukrs = tg_febko2-bukrs
+           AND azdat = tg_febko2-azdat
+           AND ktonr = tg_febko2-ktonr
+           AND hbkid = tg_febko2-hbkid
+           AND hktid = tg_febko2-hktid
+           %_HINTS ORACLE 'index(febko "FEBKO~Z01")'.
+  IF sy-subrc = 0.
+    SELECT *
+           FROM ztbfi834
+           INTO TABLE tg_ztbfi834a
+           FOR ALL ENTRIES IN tg_febko
+           WHERE empresa = tg_febko-bukrs
+             AND hkont = tg_febko-hkont
+             AND ktonr = tg_febko-ktonr
+             AND absnd = tg_febko-absnd
+             AND hbkid = tg_febko-hbkid
+             AND hktid = tg_febko-hktid.
+  ENDIF.
+
+ENDFORM.                    " SELECIONA_DADOS_NOVA_DATA
+*&---------------------------------------------------------------------*
+*&      Form  MONTA_DADOS2
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM monta_dados2 .
+
+  SORT:tg_febko BY bukrs hkont ktonr absnd hbkid hktid,
+       tg_ztbfi834a BY empresa hkont ktonr absnd hbkid hktid.
+
+  LOOP AT tg_febko INTO wg_febko.
+    READ TABLE tg_ztbfi834a INTO wg_ztbfi834 WITH KEY empresa = wg_febko-bukrs
+                                                       hkont = wg_febko-hkont
+                                                       ktonr = wg_febko-ktonr
+                                                       absnd = wg_febko-absnd
+                                                       hbkid = wg_febko-hbkid
+                                                       hktid = wg_febko-hktid BINARY SEARCH.
+    IF sy-subrc = 0.
+
+      wg_final-bukrs = wg_febko-bukrs.
+      wg_final-hkont = wg_febko-hkont.
+      wg_final-banco = wg_ztbfi834-banco.
+      wg_final-agencia = wg_ztbfi834-agencia.
+      wg_final-ktonr = wg_febko-ktonr.
+      wg_final-absnd = wg_febko-absnd.
+      wg_final-hbkid = wg_febko-hbkid.
+      wg_final-hktid = wg_febko-hktid.
+      wg_final-azdat = wg_febko-azdat.
+      wg_final-azidt = wg_febko-azidt.
+      wg_final-ssbtr = wg_febko-ssbtr.
+      wg_final-esbtr = wg_febko-esbtr.
+      wg_final-realizado = wg_final-ssbtr + wg_final-ext_manual - wg_final-esbtr.
+      APPEND wg_final TO tg_final.
+
+    ENDIF.
+
+    CLEAR wg_final.
+  ENDLOOP.
+ENDFORM.                    " MONTA_DADOS2
+*&---------------------------------------------------------------------*
+*&      Form  FILTRA_ULTIMA_DATA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM filtra_ultima_data .
+
+  DATA:vl_cont TYPE i.
+
+  CLEAR: tg_febko3[],vg_data,vl_cont.
+
+  tg_febko3[] = tg_febko[].
+
+  SORT:tg_febko  BY bukrs hkont ktonr ktopl absnd hbkid hktid ASCENDING azdat DESCENDING,
+       tg_febko3 BY bukrs hkont ktonr ktopl absnd hbkid hktid ASCENDING azdat DESCENDING.
+
+  DELETE ADJACENT DUPLICATES FROM tg_febko3 COMPARING bukrs hkont ktonr ktopl absnd hbkid hktid.
+
+  LOOP AT tg_febko3 ASSIGNING <f_febko3>.
+
+    READ TABLE tg_febko INTO wg_febko WITH KEY bukrs = <f_febko3>-bukrs
+                                               hkont = <f_febko3>-hkont
+                                               ktonr = <f_febko3>-ktonr
+                                               ktopl = <f_febko3>-ktopl
+                                               absnd = <f_febko3>-absnd
+                                               hbkid = <f_febko3>-hbkid
+                                               hktid = <f_febko3>-hktid BINARY SEARCH.
+    IF sy-subrc = 0.
+
+      CLEAR:vg_data.
+
+      vg_data = p_dataex - 1.
+
+      IF wg_febko-azdat = vg_data.
+
+        <f_febko3>-azdat = wg_febko-azdat.
+        <f_febko3>-ssbtr = wg_febko-ssbtr.
+        <f_febko3>-esbtr = wg_febko-esbtr.
+
+      ELSE.
+
+        <f_febko3>-azdat = vg_data.
+        CLEAR: <f_febko3>-ssbtr,<f_febko3>-esbtr.
+
+      ENDIF.
+
+    ENDIF.
+
+  ENDLOOP.
+
+  CLEAR: tg_febko[].
+
+  tg_febko[] = tg_febko3[].
+
+ENDFORM.                    " FILTRA_ULTIMA_DATA
+*-----------------------------------------------------------------------
+* Form  ZF_F4_LAYOUTS                                               OK P
+*-----------------------------------------------------------------------
+FORM zf_f4_layouts USING i_restrict TYPE salv_de_layout_restriction
+                CHANGING c_layout   TYPE disvariant-variant.
+  DATA:
+    wa_layout TYPE salv_s_layout_info,
+    wa_key    TYPE salv_s_layout_key.
+  "
+  wa_key-report = sy-repid.
+  "
+  wa_layout     = cl_salv_layout_service=>f4_layouts(
+  s_key         = wa_key
+  restrict      = i_restrict ).
+  "
+  c_layout      = wa_layout-layout.
+  "
+ENDFORM.                    "zf_f4_layouts
